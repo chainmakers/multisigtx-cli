@@ -57,7 +57,17 @@ fn main() {
         &rawtx, Some(p2sh_inputs), Some(vec![&privkey]), None
     );
 
-    println!("./komodo-cli sendrawtransaction {}", signedtx.unwrap().to_string())
+    match signedtx {
+        Ok(tx) => {
+            if tx.complete {
+                println!("./komodo-cli sendrawtransaction {}", tx.to_string())
+            } else {
+                panic!("Wrong WIF!!! {:?}", tx.errors)
+            }
+        }
+        Err(err) => panic!("Signing went wrong: {}", err)
+    }
+
 }
 
 fn construct_tx(client: &Client, filteredutxos: &AddressUtxos, sendfromaddress: &str, sendtoaddress: &Address, amount: u64) -> SerializedRawTransaction {
