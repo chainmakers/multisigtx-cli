@@ -45,7 +45,7 @@ fn main() {
 
     // Construct the transaction, including the p2sh inputs since it is a multisig transaction:
 
-    let rawtx = construct_tx(&client, &filtered_utxos, address, &sendtoaddress, amount, balance);
+    let rawtx = construct_tx(&client, &filtered_utxos, address, &sendtoaddress, amount);
     let p2sh_inputs = komodo_rpc_client::arguments::P2SHInputSetBuilder::from(&filtered_utxos)
         .set_redeem_script(redeem_script.to_string())
         .build()
@@ -60,7 +60,7 @@ fn main() {
     println!("./komodo-cli sendrawtransaction {}", signedtx.unwrap().to_string())
 }
 
-fn construct_tx(client: &Client, filteredutxos: &AddressUtxos, sendfromaddress: &str, sendtoaddress: &Address, amount: u64, current_balance: u64) -> SerializedRawTransaction {
+fn construct_tx(client: &Client, filteredutxos: &AddressUtxos, sendfromaddress: &str, sendtoaddress: &Address, amount: u64) -> SerializedRawTransaction {
     let inputs = komodo_rpc_client::arguments::CreateRawTransactionInputs::from(filteredutxos);
     let mut outputs = komodo_rpc_client::arguments::CreateRawTransactionOutputs::new();
     outputs.add(&sendtoaddress.to_string(), amount as f64 / FCOIN);
@@ -75,8 +75,10 @@ fn construct_tx(client: &Client, filteredutxos: &AddressUtxos, sendfromaddress: 
 
     // make sure the amount has 8 decimals:
     // ignore dust:
-    let send_back = current_balance - amount + interest;
-//    dbg!(send_back);
+    // only use total amount from filtered utxos
+    let filtered_balance = filteredutxos.0.iter().fold(0, |acc, x| acc + x.satoshis);
+
+    let send_back = filtered_balance - amount + interest - 456;
 
     if send_back > 100 {
         outputs.add(sendfromaddress, send_back as f64 / FCOIN);
@@ -84,7 +86,6 @@ fn construct_tx(client: &Client, filteredutxos: &AddressUtxos, sendfromaddress: 
 
     let mut sertx = client.create_raw_transaction(inputs, outputs).expect("Something went wrong while constructing rawtx");
     sertx.set_locktime();
-//    dbg!(&sertx);
 
     sertx
 }
