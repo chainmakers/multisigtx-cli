@@ -1,0 +1,8 @@
+[package]
+name = "multisig-cli"
+version = "0.1.0"
+authors = ["Jorian <jorian@outlook.com>"]
+edition = "2018"
+
+[dependencies]
+komodo_rpc_client = { path = "/home/n41r0j/IdeaProjects/komodo-rpc-client/" }
