@@ -1,9 +1,20 @@
 extern crate komodo_rpc_client;
+extern crate serde_json;
+extern crate serde;
+extern crate chrono;
 
 use komodo_rpc_client::arguments::address::Address;
 use komodo_rpc_client::{Client, AddressUtxos, SerializedRawTransaction, PrivateKey, RawTransaction, Vin};
 use komodo_rpc_client::KomodoRpcApi;
-use std::env;
+
+use serde::{Deserialize, Serialize};
+
+use std::{env, fs};
+use std::convert::AsRef;
+
+use komodo_rpc_client::arguments::P2SHInputSet;
+use std::hash::Hash;
+use chrono::{DateTime, Utc};
 
 const FCOIN: f64 = 100_000_000.0;
 
@@ -43,20 +54,6 @@ fn main() {
         },
         _ => panic!("wrong number of arguments") // todo explain what the arguments are in help message
     };
-
-    // Get balance and check if balance is sufficient:
-
-//    let balance: u64 = client.get_address_balance(
-//        &komodo_rpc_client::arguments::AddressList::from(address)
-//    ).unwrap().balance;
-//
-//    if balance < amount {
-//        panic!("balance of {} insufficient!", address);
-//    }
-//
-//    // Get current utxos for address to send from:
-//
-//
 }
 
 fn create_tx(mut args: Vec<String>) {
@@ -94,7 +91,7 @@ fn create_tx(mut args: Vec<String>) {
     // Construct the transaction, including the p2sh inputs since it is a multisig transaction:
 
     let rawtx = construct_tx(&client, &filtered_utxos, &send_from_address, &send_to_address, amount);
-    dbg!(&rawtx);
+//    dbg!(&rawtx);
     let p2sh_inputs = komodo_rpc_client::arguments::P2SHInputSetBuilder::from(&filtered_utxos)
         .set_redeem_script(redeem_script.to_string())
         .build()
@@ -103,7 +100,7 @@ fn create_tx(mut args: Vec<String>) {
     // Finally, sign the transaction, and print the hex to be broadcasted:
 
     let signedtx = client.sign_raw_transaction_with_key(
-        &rawtx, Some(p2sh_inputs), Some(vec![&privkey]), None
+        &rawtx, Some(&p2sh_inputs), Some(vec![&privkey]), None
     );
 
     match signedtx {
@@ -117,6 +114,14 @@ fn create_tx(mut args: Vec<String>) {
                 // p2sh_inputs
                 // signedtx.hex
 
+                let m = IncompletelySignedTx::new(tx.hex.clone(), p2sh_inputs.clone());
+                let e = serde_json::to_string(&m).unwrap();
+
+                let now: DateTime<Utc> = Utc::now();
+                let now = now.format("%Y_%m_%d-%H:%M:%S").to_string();
+
+                let _ = fs::write(format!("{}.json", now), e);
+
                 println!("Signing has not yet been completed. If no more signers expected, WIF is most likely incorrect.\n\
                 If this transaction needs more signers, send this to a next signer: \n{}", tx.hex)
 
@@ -127,7 +132,29 @@ fn create_tx(mut args: Vec<String>) {
 }
 
 fn sign_hex(mut args: Vec<String>) {
+
+
     // based on the hex, i can reconstruct the p2sh inputs:
+    let client = komodo_rpc_client::Client::new_komodo_client().unwrap();
+
+    let privkey = args.pop().unwrap();
+    let privkey = PrivateKey::from_string(privkey).unwrap();
+
+    let serialized_hex = args.pop().unwrap(); // this is most likely an already signed transaction
+    let decoded_raw_tx = client.decode_raw_transaction(serialized_hex.as_str()).unwrap();
+
+    let redeem_script = extract_redeem_script(&decoded_raw_tx);
+}
+
+fn extract_redeem_script(tx: &RawTransaction) -> String {
+    let vin: &Vin = tx.vin.get(0).unwrap();
+    let script_sig = &vin.script_sig;
+    let asm = script_sig.asm.as_str();
+
+    // this asm contains the redeemscript. It is always the last part, after a space.
+    let redeem_script = asm.split_whitespace().last().expect("redeemscript was not correctly extracted");
+
+    String::from(redeem_script)
 }
 
 fn construct_tx(client: &Client, filteredutxos: &AddressUtxos, send_from_address: &Address, send_to_address: &Address, amount: u64) -> SerializedRawTransaction {
@@ -181,3 +208,17 @@ fn filter_utxos(mut addressutxos: AddressUtxos, amount: u64) -> AddressUtxos {
     addressutxos
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct IncompletelySignedTx {
+    pub(crate) hex: String,
+    pub(crate) p2sh: P2SHInputSet
+}
+
+impl IncompletelySignedTx {
+    pub(crate) fn new(hex: String, p2sh: P2SHInputSet) -> IncompletelySignedTx {
+        IncompletelySignedTx {
+            hex,
+            p2sh
+        }
+    }
+}

@@ -6,4 +6,8 @@ edition = "2018"
 
 [dependencies]
 komodo_rpc_client = { path = "/home/n41r0j/IdeaProjects/komodo-rpc-client/" }
+serde = "1.0.92"
+serde_json = "1.0.39"
+chrono = "0.4.6"
+
 # komodo_rpc_client = { git = "https://github.com/jorian/komodorpc-rust-client" }
