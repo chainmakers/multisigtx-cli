@@ -15,6 +15,8 @@ use std::convert::AsRef;
 use komodo_rpc_client::arguments::P2SHInputSet;
 use std::hash::Hash;
 use chrono::{DateTime, Utc};
+use std::fs::File;
+use std::io::Read;
 
 const FCOIN: f64 = 100_000_000.0;
 
@@ -46,6 +48,8 @@ fn main() {
     match args.len() {
         3 => {
             // sign an existing hex
+            // 1. json file
+            // 2. WIF
             sign_hex(args);
         },
         6 => {
@@ -118,13 +122,13 @@ fn create_tx(mut args: Vec<String>) {
                 let e = serde_json::to_string(&m).unwrap();
 
                 let now: DateTime<Utc> = Utc::now();
-                let now = now.format("%Y_%m_%d-%H:%M:%S").to_string();
 
-                let _ = fs::write(format!("{}.json", now), e);
+                let file_name = format!("{}.json", now.format("%Y_%m_%d-%H:%M:%S").to_string());
 
-                println!("Signing has not yet been completed. If no more signers expected, WIF is most likely incorrect.\n\
-                If this transaction needs more signers, send this to a next signer: \n{}", tx.hex)
+                let _ = fs::write(&file_name, e);
 
+                println!("Signing has not yet been completed. If no more signers are expected, WIF is most likely incorrect.\n\
+                If this transaction needs more signers, send the following JSON file to the next signer: {}", file_name);
             }
         }
         Err(err) => panic!("Signing went wrong: {}", err)
@@ -133,17 +137,31 @@ fn create_tx(mut args: Vec<String>) {
 
 fn sign_hex(mut args: Vec<String>) {
 
-
-    // based on the hex, i can reconstruct the p2sh inputs:
-    let client = komodo_rpc_client::Client::new_komodo_client().unwrap();
+    // 1. json file
+    // 2. WIF
 
     let privkey = args.pop().unwrap();
-    let privkey = PrivateKey::from_string(privkey).unwrap();
+    let file_name = args.pop().unwrap();
 
-    let serialized_hex = args.pop().unwrap(); // this is most likely an already signed transaction
-    let decoded_raw_tx = client.decode_raw_transaction(serialized_hex.as_str()).unwrap();
+    let mut file = File::open(&file_name).expect(&format!("Could not read file: {}", &file_name));
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).expect("Something went wrong while reading JSON.");
 
-    let redeem_script = extract_redeem_script(&decoded_raw_tx);
+    let m: IncompletelySignedTx = serde_json::from_str(&contents).expect("Something went wrong while decoding JSON");
+
+    dbg!(&m);
+//
+//
+//    // based on the hex, i can reconstruct the p2sh inputs:
+//    let client = komodo_rpc_client::Client::new_komodo_client().unwrap();
+//
+//    let privkey = args.pop().unwrap();
+//    let privkey = PrivateKey::from_string(privkey).unwrap();
+//
+//    let serialized_hex = args.pop().unwrap(); // this is most likely an already signed transaction
+//    let decoded_raw_tx = client.decode_raw_transaction(serialized_hex.as_str()).unwrap();
+//
+//    let redeem_script = extract_redeem_script(&decoded_raw_tx);
 }
 
 fn extract_redeem_script(tx: &RawTransaction) -> String {
