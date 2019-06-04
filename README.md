@@ -7,4 +7,7 @@ This Command Line Tool allows you to do a transaction from a multisig address.
 1. Clone repo, cd into directory
 2. `cargo build --release`
 3. `cd target/release`
-4. `./multisig-cli <sendtoaddress> <amount> <WIF>` (WIF is needed to sign multisig transaction)
+
+There are 2 ways of supplying command line arguments:
+- to create: `./multisig-cli <sendtoaddress> <amount> <sendfromaddress> <redeemScript> <WIF>` 
+- to sign: `./multisig-cli <location of JSON> <WIF>`
