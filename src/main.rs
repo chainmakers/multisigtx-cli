@@ -4,16 +4,14 @@ extern crate serde;
 extern crate chrono;
 
 use komodo_rpc_client::arguments::address::Address;
-use komodo_rpc_client::{Client, AddressUtxos, SerializedRawTransaction, PrivateKey, RawTransaction, Vin};
+use komodo_rpc_client::{Client, AddressUtxos, SerializedRawTransaction, PrivateKey, SignedRawTransaction};
 use komodo_rpc_client::KomodoRpcApi;
 
 use serde::{Deserialize, Serialize};
 
 use std::{env, fs};
-use std::convert::AsRef;
 
 use komodo_rpc_client::arguments::P2SHInputSet;
-use std::hash::Hash;
 use chrono::{DateTime, Utc};
 use std::fs::File;
 use std::io::Read;
@@ -21,191 +19,184 @@ use std::io::Read;
 const FCOIN: f64 = 100_000_000.0;
 
 /*
-
-512103127be86a9a59a1ad13c788cd50c5ad0089a1fb05caa11aef6cc19cfb60d8885d2102917ec792638dd7b0822a108ceb53000d9954133a68da960d80e9a9d0a72c7ec252ae
-
 Based on the number of arguments, we can decide what the program should do: create a new tx, or sign a supplied hex.
 
 Inputs to the program in case of new tx:
 - toaddress
 - amount
 - fromaddress
-- redeemScript -> we can always
-- privkey
+- redeemScript
+- WIF
 
 Inputs to the program in case of signing an already signed hex:
-- hex to sign (maybe get it encoded first)
-    after signing:
-    - if complete == false, show encoded string
-    - if complete == true, show the hex to broadcast
-- wif
+- location of json containing multisig information
+- WIF
+
+todo No self send possible! So no claim of rewards possible!
+todo txfee
 */
 
 fn main() {
     // Collect the command line parameters:
     let mut args = env::args().collect::<Vec<_>>();
 
+    // Determine whether to create or sign
     match args.len() {
         3 => {
             // sign an existing hex
-            // 1. json file
+            // 1. json file with MultiSignWrapper
             // 2. WIF
-            sign_hex(args);
+
+            let privkey = args.pop().unwrap();
+            let privkey = PrivateKey::from_string(privkey).expect("Unable to parse private key, is WIF correct?");
+            let file_name = args.pop().unwrap();
+
+            let mut file = File::open(&file_name).expect(&format!("Could not read file: {}", &file_name));
+            let mut contents = String::new();
+            file.read_to_string(&mut contents).expect("Something went wrong while reading JSON.");
+
+            let mut msign: MultiSignatureTransaction = serde_json::from_str(&contents).expect("Something went wrong while decoding JSON");
+            msign.sign(&privkey);
+
+//            dbg!(&msign);
+
+            msign.is_signing_completed();
         },
         6 => {
             // create a new tx
-           create_tx(args);
+            // 1. send_to_address
+            // 2. amount
+            // 3. send_from_address
+            // 4. redeemScript
+            // 5. WIF
+
+            // Sanitize the inputs
+            // Since we pop as if it is a stack, we need to start from the end:
+            let privkey = args.pop().unwrap();
+            let privkey = PrivateKey::from_string(privkey).expect("Unable to parse private key, is WIF correct?");
+
+            let redeem_script = args.pop().unwrap();
+
+            let send_from_address = Address::from(&args.pop().unwrap()).expect("Please enter a valid KMD address");
+
+            let amount: f64 = args.pop().unwrap().parse().expect("Please enter a valid numeric amount to send");
+            let amount = (amount * FCOIN) as u64;
+
+            if amount < 100 {
+                panic!("dust");
+            }
+
+            let send_to_address: Address = Address::from(&args.pop().unwrap()).expect("Please enter a valid KMD address");
+
+            let msign = MultiSignatureTransaction::create(
+                &send_to_address,
+                amount,
+                &send_from_address,
+                &redeem_script,
+                &privkey
+            );
+
+            msign.is_signing_completed();
         },
         _ => panic!("wrong number of arguments") // todo explain what the arguments are in help message
     };
 }
 
-fn create_tx(mut args: Vec<String>) {
-    let client = komodo_rpc_client::Client::new_komodo_client().unwrap();
-
-    let privkey = args.pop().unwrap();
-    let privkey = PrivateKey::from_string(privkey).expect("Unable to parse privkey, is WIF correct?");
-
-    let redeem_script = args.pop().unwrap();
-    let send_from_address = Address::from(&args.pop().unwrap()).expect("Please enter a valid KMD address");
-
-    let amount: f64 = args.pop().unwrap().parse().expect("Please enter a valid numeric amount to send");
-    let amount = (amount * FCOIN) as u64;
-    let send_to_address: Address = Address::from(&args.pop().unwrap()).expect("Please enter a valid KMD address");
-
-
-    let balance: u64 = client.get_address_balance(
-        &komodo_rpc_client::arguments::AddressList::from_address(&send_from_address)
-    ).unwrap().balance;
-
-    if balance < amount {
-        panic!("balance of {} insufficient!", send_from_address.to_string());
-    }
-
-    // get the utxos:
-
-    let addressutxos = client.get_address_utxos(
-        &komodo_rpc_client::arguments::AddressList::from_address(&send_from_address)
-    ).unwrap();
-
-    // Select the utxos needed based on the amount to send:
-
-    let filtered_utxos = filter_utxos(addressutxos, amount);
-
-    // Construct the transaction, including the p2sh inputs since it is a multisig transaction:
-
-    let rawtx = construct_tx(&client, &filtered_utxos, &send_from_address, &send_to_address, amount);
-//    dbg!(&rawtx);
-    let p2sh_inputs = komodo_rpc_client::arguments::P2SHInputSetBuilder::from(&filtered_utxos)
-        .set_redeem_script(redeem_script.to_string())
-        .build()
-        .unwrap();
-
-    // Finally, sign the transaction, and print the hex to be broadcasted:
-
-    let signedtx = client.sign_raw_transaction_with_key(
-        &rawtx,
-        Some(&p2sh_inputs),
-        Some(vec![&privkey]),
-        None
-    );
-
-    match signedtx {
-        Ok(tx) => {
-            if tx.complete {
-                println!("./komodo-cli sendrawtransaction {}", tx.to_string())
-            } else {
-                // at this point, either the WIF is wrong or
-                // the hex has not been signed with enough signers.
-                //
-                // p2sh_inputs
-                // signedtx.hex
-
-                let m = IncompletelySignedTx::new(tx.hex.clone(), p2sh_inputs.clone());
-                let e = serde_json::to_string(&m).unwrap();
-
-                let now: DateTime<Utc> = Utc::now();
-
-                let file_name = format!("{}.json", now.format("%Y_%m_%d-%H:%M:%S").to_string());
-
-                let _ = fs::write(&file_name, e);
-
-                println!("Signing has not yet been completed. If no more signers are expected, WIF is most likely incorrect.\n\
-                If this transaction needs more signers, send the following JSON file to the next signer: {}", file_name);
-            }
-        }
-        Err(err) => panic!("Signing went wrong: {}", err)
-    }
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct MultiSignatureTransaction {
+    pub(crate) signed_tx: SignedRawTransaction,
+    pub(crate) p2sh: P2SHInputSet
 }
 
-fn sign_hex(mut args: Vec<String>) {
+impl MultiSignatureTransaction {
+    pub fn create(send_to_address: &Address,
+              amount: u64,
+              send_from_address: &Address,
+              redeem_script: &str,
+              privkey: &PrivateKey) -> Self {
+        let client = komodo_rpc_client::Client::new_komodo_client().unwrap();
 
-    let client = komodo_rpc_client::Client::new_komodo_client().unwrap();
-    // 1. json file
-    // 2. WIF
+        let balance: u64 = client.get_address_balance(
+            &komodo_rpc_client::arguments::AddressList::from_address(&send_from_address)
+        ).unwrap().balance;
 
-    let privkey = args.pop().unwrap();
-    let privkey = PrivateKey::from_string(privkey).expect("Unable to parse privkey, is WIF correct?");
-    let file_name = args.pop().unwrap();
+        dbg!(balance);
 
-    let mut file = File::open(&file_name).expect(&format!("Could not read file: {}", &file_name));
-    let mut contents = String::new();
-    file.read_to_string(&mut contents).expect("Something went wrong while reading JSON.");
-
-    let m: IncompletelySignedTx = serde_json::from_str(&contents).expect("Something went wrong while decoding JSON");
-
-    dbg!(&m);
-
-    let signedtx = client.sign_raw_transaction_with_key(
-        &SerializedRawTransaction::from_hex(m.hex),
-        Some(&m.p2sh),
-        Some(vec![&privkey]),
-        None
-    );
-
-    match signedtx {
-        Ok(tx) => {
-            if tx.complete {
-                println!("./komodo-cli sendrawtransaction {}", tx.to_string())
-            } else {
-                // at this point, either the WIF is wrong or
-                // the hex has not been signed with enough signers.
-                //
-                // p2sh_inputs
-                // signedtx.hex
-
-                let m = IncompletelySignedTx::new(tx.hex.clone(), m.p2sh.clone());
-                let e = serde_json::to_string(&m).unwrap();
-
-                let now: DateTime<Utc> = Utc::now();
-
-                let file_name = format!("{}.json", now.format("%Y_%m_%d-%H:%M:%S").to_string());
-
-                let _ = fs::write(&file_name, e);
-
-                println!("Signing has not yet been completed. If no more signers are expected, WIF is most likely incorrect.\n\
-                If this transaction needs more signers, send the following JSON file to the next signer: {}", file_name);
-            }
+        if balance < amount {
+            panic!("balance of {} insufficient!", send_from_address.to_string());
         }
-        Err(err) => panic!("Signing went wrong: {}", err)
+
+        // get the utxos:
+        let addressutxos = client.get_address_utxos(
+            &komodo_rpc_client::arguments::AddressList::from_address(&send_from_address)
+        ).unwrap();
+
+        // Select the utxos needed based on the amount to send:
+        let filtered_utxos = filter_utxos(addressutxos, amount);
+
+        // Construct the raw transaction and the p2sh inputs, since it is a multisig transaction:
+        let rawtx = construct_tx(&client, &filtered_utxos, &send_from_address, &send_to_address, amount);
+
+        let p2sh_inputs = komodo_rpc_client::arguments::P2SHInputSetBuilder::from(&filtered_utxos)
+            .set_redeem_script(redeem_script.to_string())
+            .build()
+            .unwrap();
+
+        // Finally, sign the transaction:
+        let signed_tx = client.sign_raw_transaction_with_key(
+            &rawtx,
+            Some(&p2sh_inputs),
+            Some(vec![&privkey]),
+            None
+        ).unwrap();
+
+        dbg!(&signed_tx);
+
+        MultiSignatureTransaction {
+            signed_tx,
+            p2sh: p2sh_inputs
+        }
     }
-}
 
-fn extract_redeem_script(tx: &RawTransaction) -> String {
-    let vin: &Vin = tx.vin.get(0).unwrap();
-    let script_sig = &vin.script_sig;
-    let asm = script_sig.asm.as_str();
+    pub fn is_signing_completed(&self) {
+        if self.signed_tx.complete {
+            println!("./komodo-cli sendrawtransaction {}", self.signed_tx.to_string())
+        } else {
+            let serialized_msign = serde_json::to_string(&self).unwrap();
 
-    // this asm contains the redeemscript. It is always the last part, after a space.
-    let redeem_script = asm.split_whitespace().last().expect("redeemscript was not correctly extracted");
+            let now: DateTime<Utc> = Utc::now();
+            let file_name = format!("{}.json", now.format("%Y_%m_%d-%H:%M:%S").to_string());
 
-    String::from(redeem_script)
+            let _ = fs::write(&file_name, serialized_msign);
+
+            println!("Signing has not yet been completed. If no more signers are expected, WIF is most likely incorrect.\n\
+                If this transaction needs more signers, send the following JSON file to the next signer: {}", file_name);
+        }
+    }
+
+    pub fn sign(&mut self, privkey: &PrivateKey) {
+        let client = komodo_rpc_client::Client::new_komodo_client().unwrap();
+
+        let signed_tx = client.sign_raw_transaction_with_key(
+            &SerializedRawTransaction::from_hex(self.signed_tx.hex.clone()),
+            Some(&self.p2sh),
+            Some(vec![&privkey]),
+            None
+        ).unwrap();
+
+        self.signed_tx = signed_tx;
+    }
 }
 
 fn construct_tx(client: &Client, filteredutxos: &AddressUtxos, send_from_address: &Address, send_to_address: &Address, amount: u64) -> SerializedRawTransaction {
     let inputs = komodo_rpc_client::arguments::CreateRawTransactionInputs::from(filteredutxos);
     let mut outputs = komodo_rpc_client::arguments::CreateRawTransactionOutputs::new();
-    outputs.add(&send_to_address.to_string(), amount as f64 / FCOIN);
+    outputs.add(&send_to_address, amount as f64 / FCOIN);
+
+    // todo what if the amount to spend exactly matches amount in filteredutxos, with regards to tx fee?
+    // there could be more utxos that the function just didn't filter.
+    // 1. add txfee to filteredutxos parameter
+    // 2. subtract fee from
 
     let mut interest = 0;
     for utxo in &filteredutxos.0 {
@@ -222,11 +213,12 @@ fn construct_tx(client: &Client, filteredutxos: &AddressUtxos, send_from_address
     // only use total amount from filtered utxos
     let filtered_balance = filteredutxos.0.iter().fold(0, |acc, x| acc + x.satoshis);
 
-    let send_back = filtered_balance - amount + interest - 456;
+    let send_back = ((filtered_balance - amount) + interest);
 
     if send_back > 100 {
-        outputs.add(&send_from_address.to_string(), send_back as f64 / FCOIN);
+        outputs.add(&send_from_address, send_back as f64 / FCOIN);
     }
+
 
     let mut sertx = client.create_raw_transaction(inputs, outputs).expect("Something went wrong while constructing rawtx");
     sertx.set_locktime();
@@ -251,19 +243,4 @@ fn filter_utxos(mut addressutxos: AddressUtxos, amount: u64) -> AddressUtxos {
     addressutxos.0 = addressutxos.0.into_iter().filter(|utxo| utxos_to_keep.contains(&utxo.txid)).collect::<Vec<_>>();
 
     addressutxos
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct IncompletelySignedTx {
-    pub(crate) hex: String,
-    pub(crate) p2sh: P2SHInputSet
-}
-
-impl IncompletelySignedTx {
-    pub(crate) fn new(hex: String, p2sh: P2SHInputSet) -> IncompletelySignedTx {
-        IncompletelySignedTx {
-            hex,
-            p2sh
-        }
-    }
 }
