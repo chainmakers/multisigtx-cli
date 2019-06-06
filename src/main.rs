@@ -47,6 +47,8 @@ fn main() {
             // 1. json file with MultiSignWrapper
             // 2. WIF
 
+            // Sanitize the inputs
+            // Since we pop as if it is a stack, we need to start from the end:
             let privkey = args.pop().unwrap();
             let privkey = PrivateKey::from_string(privkey).expect("Unable to parse private key, is WIF correct?");
             let file_name = args.pop().unwrap();
