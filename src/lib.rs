@@ -1,6 +1,7 @@
 extern crate serde_json;
 extern crate serde;
 extern crate chrono;
+extern crate reqwest;
 
 mod multisignature;
 
