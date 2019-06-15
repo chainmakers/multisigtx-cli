@@ -25,15 +25,10 @@ impl MultiSignatureTransaction {
                   privkey: &PrivateKey) -> Self {
         let client = komodo_rpc_client::Client::new_komodo_client().unwrap();
 
-//        let url = format!("http://kmd.explorer.dexstats.info/insight-api-komodo/addr/{}", send_from_address.to_string());
-//        let mut response = reqwest::get(&url).expect("Something went wrong while getting balance. kmd.explorer.dexstats.info down?");
-//
-//        let address: ApiAddress = response.json().expect("Something went wrong deserializing balance response");
 //         todo this needs addressindex to be enabled. Might consider a version that does not need this.
         let balance: u64 = client.get_address_balance(
             &komodo_rpc_client::arguments::AddressList::from_address(&send_from_address)
         ).unwrap().balance;
-//        let balance = address.balanceSat;
 
         dbg!(balance);
 
@@ -42,9 +37,6 @@ impl MultiSignatureTransaction {
         }
 
         // get the utxos:
-//        let url = format!("http://kmd.explorer.dexstats.info/insight-api-komodo/addr/{}/utxo", send_from_address.to_string());
-//        let mut response = reqwest::get(&url).expect("Something went wrong while getting balance. kmd.explorer.dexstats.info down?");
-
         let addressutxos = client.get_address_utxos(
             &komodo_rpc_client::arguments::AddressList::from_address(&send_from_address)
         ).unwrap();
@@ -164,31 +156,4 @@ fn filter_utxos(mut addressutxos: AddressUtxos, amount: u64) -> AddressUtxos {
     addressutxos.0 = addressutxos.0.into_iter().filter(|utxo| utxos_to_keep.contains(&utxo.txid)).collect::<Vec<_>>();
 
     addressutxos
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-struct ApiAddress {
-    pub (crate) addrStr: String,
-    pub (crate) balance: f64,
-    pub (crate) balanceSat: u64,
-    pub (crate) totalReceived: f64,
-    pub (crate) totalReceivedSat: u64,
-    pub (crate) totalSent: f64,
-    pub (crate) totalSentSat: u64,
-    pub (crate) unconfirmedBalance: f64,
-    pub (crate) unconfirmedBalanceSat: u64,
-    pub (crate) unconfirmedTxApperances: u64,
-    pub (crate) txApperances: u64,
-    pub (crate) transactions: Vec<String>
-}
-
-struct ApiUtxo {
-    address: String,
-    txid: String,
-    vout: u32,
-    scriptPubKey: String,
-    amount: f64,
-    satoshis: u64,
-    height: u32,
-    confirmations: u32
 }
